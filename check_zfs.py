@@ -434,7 +434,6 @@ if checkArcstats is True:
     if len(lineArray) == 3:
       if lineArray[0] == 'c_min':
         arcMinSize = str(lineArray[2])+"B"
-        print(arcMinSize)
         arcMinSize = round(ConvertToGB(arcMinSize),2)
       elif lineArray[0] == 'c_max':
         arcMaxSize = str(lineArray[2])+"B"
@@ -443,7 +442,7 @@ if checkArcstats is True:
   for idx, line in enumerate(arcstatLineList):
     if idx != 0:
       lineArray = line.split()
-      if len(lineArray) is 8:
+      if len(lineArray) == 8:
         arcReads = int(lineArray[0])
         arcMisses = int(lineArray[1])
         arcMissRate = float(lineArray[2])
@@ -534,7 +533,6 @@ perfdata+=" "
 
 if checkArcstats is True:
   if arcSize is not None and arcMinSize is not None and arcMaxSize is not None:
-    print("HERE")
     perfdata+="arcsize="+str(arcSize)+"G;"+str(arcMinSize)+";"+str(arcMaxSize)+";"
     perfdata+=" "
   if arcSize is not None and arcTargetSize is not None:
@@ -609,6 +607,12 @@ if frag!='' and not fragMsgFilled:
     msg+=", FRAG: "+str(frag)
 if cap!='' and not capMsgFilled:
     msg+=", CAP: "+str(cap)
+if arcReads is not None:
+    msg+=", ARCREADS: "+str(arcReads)
+if arcMissRate is not None:
+    msg+=", ARCMISSRATE: "+str(arcMissRate)+"%"
+if arcMissRate is not None:
+    msg+=", ARCSIZE: "+str(arcSize)+"G"
 
 ##
 # Print our output and return
