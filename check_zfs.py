@@ -3,7 +3,7 @@
 ########################################################################
 ##
 ## Written by Zachary LaCelle
-## Copyright 2016-2020
+## Copyright 2016-2021
 ## Licensed under GPL (see below)
 ##
 ## Nagios script to monitor ZFS pools/filesystems
@@ -63,7 +63,7 @@ pythonVersionCheck();
 sudoCommand='/usr/bin/sudo'
 zpoolCommand='/sbin/zpool'
 zfsCommand='/sbin/zfs'
-
+arcstatsPath='/proc/spl/kstat/zfs/arcstats'
 ##
 # Variables to print at the end
 ##
@@ -154,6 +154,7 @@ parser = argparse.ArgumentParser(
     epilog='Note that monitor flags (e.g. capacity) require 2 arguments: warning threshold, and critical threshold')
 parser.add_argument('--capacity', help="monitor utilization of zpool (%%, int [0-100])", type=int, nargs=2)
 parser.add_argument('--fragmentation', help="monitor fragmentation of zpool (%%, int [0-100])", type=int, nargs=2)
+parser.add_argument('--arcstats', required=False, action='store_true', help="check and report on arcstats", default=False)
 parser.add_argument('--nosudo', required=False, action='store_true', help="do not attempt to sudo first when running zfs commands, instead just run them. The nagios user will need permissions to run these commands if used, so edit the sudoers file - see visudo to do this.")
 parser.add_argument('pool', help="name of the zpool to check", type=str)
 
@@ -183,6 +184,7 @@ if args.fragmentation is not None:
         logging.warning("%s  : Fragmentation thresholds must be between 0 and 100 (as a percent).", nagiosStatus[stateNum])
         parser.print_help()
         exit(stateNum)
+checkArcstats = args.arcstats
 useSudoToRunZfsCommands = not args.nosudo
 
 ## Make sure the commands we need are available to be later run
@@ -381,6 +383,72 @@ if compressValue=='on':
 
 ###################################################################################
 ##
+# Check ZFS system settings (e.g. arc hits/misses)
+
+arcEfficiencyRatio = None
+arcPrefetchEfficiencyRatio = None
+arcSize = None
+arcTargetSize = None
+arcMinSize = None
+arcMaxSize = None
+
+if checkArcstats is True:
+  getArcstatsCommand=['cat', arcstatsPath]
+  try:
+    childProcess = subprocess.Popen(getArcstatsCommand, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  except OSError as osException:
+    stateNum = RaiseStateNum(3, stateNum)
+    LogWarningRootProcessWarningAndExit("Arcstats File - exception", stateNum, osException); 
+
+  arcstatsString = childProcess.communicate()[0]
+  arcstatsRetval = childProcess.returncode
+
+  arcstatsLineList = arcstatsString.decode().split('\n')
+
+  arcHits = None
+  arcMisses = None
+  prefetchHits = None
+  prefetchMisses = None
+  prefetchMetaHits = None
+  prefetchMetaMisses = None
+
+  for idx, line in enumerate(arcstatsLineList):
+    lineArray = line.split()
+    if len(lineArray) == 3:
+      if lineArray[0] == 'hits':
+        arcHits = int(lineArray[2])
+      elif lineArray[0] == 'misses':
+        arcMisses = int(lineArray[2])
+      elif lineArray[0] == 'prefetch_data_hits':
+        prefetchHits = int(lineArray[2])
+      elif lineArray[0] == 'prefetch_data_misses':
+        prefetchMisses = int(lineArray[2])
+      elif lineArray[0] == 'prefetch_metadata_hits':
+        prefetchMetaHits = int(lineArray[2])
+      elif lineArray[0] == 'prefetch_metadata_misses':
+        prefetchMetaMisses = int(lineArray[2])
+      elif lineArray[0] == 'size':
+        arcSize = int(lineArray[2])
+      elif lineArray[0] == 'c':
+        arcTargetSize = int(lineArray[2])
+      elif lineArray[0] == 'c_min':
+        arcMinSize = int(lineArray[2])
+      elif lineArray[0] == 'c_max':
+        arcMaxSize = int(lineArray[2])
+
+  #ARC Efficiency Ratio
+  #(hits / (hits + misses))
+  if arcHits is not None and arcMisses is not None:
+    arcEfficiencyRatio = float(arcHits) / (float(arcHits) + float(arcMisses))
+  #Prefetch Efficiency Ratio
+  #(data_hits + metadata_hits)/(data_hits + data_misses + metadata_hits + metadata_misses)
+  if prefetchHits is not None and prefetchMetaHits is not None and prefetchMisses is not None and prefetchMetaMisses is not None:
+    arcPrefetchEfficiencyRatio = (float(prefetchHits)+float(prefetchMetaHits)) / (float(prefetchHits)+float(prefetchMetaHits)+float(prefetchMisses)+float(prefetchMetaMisses))
+
+            
+###################################################################################
+##
 # OK, finally in the actual status checking of the zpool
 
 # Let's build up our perfdata, regardless of what we're checking
@@ -456,6 +524,19 @@ elif health=='FAULTED':
 perfdata+="health="+str(healthNum)+";1;3;"
 perfdata+=" "
 
+if checkArcstats is True:
+  if arcSize is not None and arcMinSize is not None and arcMaxSize is not None:
+    perfdata+="arcsize="+str(arcSize)+";"+str(arcMinSize)+";"+str(arcMaxSize)+";"
+    perfdata+=" "
+  if arcSize is not None and arcTargetSize is not None:
+    perfdata+="arctargetsize="+str(arcTargetSize)+";"+str(arcMinSize)+";"+str(arcMaxSize)+";"
+    perfdata+=" "
+  if arcEfficiencyRatio is not None:
+    perfdata+="arcefficiency="+str(round(arcEfficiencyRatio*100,2))+"%;;;"
+    perfdata+=" "
+  if arcPrefetchEfficiencyRatio is not None:
+    perfdata+="arcprefetchefficiency="+str(round(arcPrefetchEfficiencyRatio*100,2))+"%;;;"
+    perfdata+=" "
 ##
 # Initial part of msg
 msg="POOL: "+str(name)
