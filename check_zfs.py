@@ -107,6 +107,10 @@ def ConvertToGB( valueStr ):
     elif valueStr.endswith('K'):
         gigs=float(value) / (1024.0 * 1024.0)
         return float(gigs)
+    elif valueStr.endswith('B'):
+        gigs=float(value) / (1024.0 * 1024.0 * 1024.0)
+        return float(gigs)
+
 
 def RaiseStateNum( stateNumIn, stateNum ):
     if stateNumIn > stateNum:
@@ -384,68 +388,72 @@ if compressValue=='on':
 ###################################################################################
 ##
 # Check ZFS system settings (e.g. arc hits/misses)
+# Use the arcstat program as it formats nicely and handles time integration
+# Use proc file for some fields that arcstat doesn't have
 
-arcEfficiencyRatio = None
-arcPrefetchEfficiencyRatio = None
 arcSize = None
 arcTargetSize = None
 arcMinSize = None
 arcMaxSize = None
+arcReads = None
+arcMisses = None
+arcMissRate = None
+prefetchMissRate = None
+metadataMissRate= None
+demandMissRate = None
 
 if checkArcstats is True:
-  getArcstatsCommand=['cat', arcstatsPath]
+  arcstatCommand=['arcstat', '-f' ,'read,miss,miss%,pm%,mm%,dm%,arcsz,c']
+  procArcstatsCommand=['cat', arcstatsPath]
   try:
-    childProcess = subprocess.Popen(getArcstatsCommand, stdin=subprocess.PIPE,
+    childProcess = subprocess.Popen(procArcstatsCommand, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   except OSError as osException:
     stateNum = RaiseStateNum(3, stateNum)
-    LogWarningRootProcessWarningAndExit("Arcstats File - exception", stateNum, osException); 
+    LogWarningRootProcessWarningAndExit("Proc Arcstats File - exception", stateNum, osException); 
 
-  arcstatsString = childProcess.communicate()[0]
-  arcstatsRetval = childProcess.returncode
+  procArcstatString = childProcess.communicate()[0]
+  procArcstatRetval = childProcess.returncode
 
-  arcstatsLineList = arcstatsString.decode().split('\n')
+  procArcstatLineList = procArcstatString.decode().split('\n')
 
-  arcHits = None
-  arcMisses = None
-  prefetchHits = None
-  prefetchMisses = None
-  prefetchMetaHits = None
-  prefetchMetaMisses = None
+  try:
+    childProcess = subprocess.Popen(arcstatCommand, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  except OSError as osException:
+    stateNum = RaiseStateNum(3, stateNum)
+    LogWarningRootProcessWarningAndExit("arcstat Command - exception", stateNum, osException); 
 
-  for idx, line in enumerate(arcstatsLineList):
+  arcstatString = childProcess.communicate()[0]
+  arcstatRetval = childProcess.returncode
+
+  arcstatLineList = arcstatString.decode().split('\n')
+  
+  for idx, line in enumerate(procArcstatLineList):
     lineArray = line.split()
     if len(lineArray) == 3:
-      if lineArray[0] == 'hits':
-        arcHits = int(lineArray[2])
-      elif lineArray[0] == 'misses':
-        arcMisses = int(lineArray[2])
-      elif lineArray[0] == 'prefetch_data_hits':
-        prefetchHits = int(lineArray[2])
-      elif lineArray[0] == 'prefetch_data_misses':
-        prefetchMisses = int(lineArray[2])
-      elif lineArray[0] == 'prefetch_metadata_hits':
-        prefetchMetaHits = int(lineArray[2])
-      elif lineArray[0] == 'prefetch_metadata_misses':
-        prefetchMetaMisses = int(lineArray[2])
-      elif lineArray[0] == 'size':
-        arcSize = int(lineArray[2])
-      elif lineArray[0] == 'c':
-        arcTargetSize = int(lineArray[2])
-      elif lineArray[0] == 'c_min':
-        arcMinSize = int(lineArray[2])
+      if lineArray[0] == 'c_min':
+        arcMinSize = str(lineArray[2])+"B"
+        print(arcMinSize)
+        arcMinSize = round(ConvertToGB(arcMinSize),2)
       elif lineArray[0] == 'c_max':
-        arcMaxSize = int(lineArray[2])
+        arcMaxSize = str(lineArray[2])+"B"
+        arcMaxSize = round(ConvertToGB(arcMaxSize),2)
 
-  #ARC Efficiency Ratio
-  #(hits / (hits + misses))
-  if arcHits is not None and arcMisses is not None:
-    arcEfficiencyRatio = float(arcHits) / (float(arcHits) + float(arcMisses))
-  #Prefetch Efficiency Ratio
-  #(data_hits + metadata_hits)/(data_hits + data_misses + metadata_hits + metadata_misses)
-  if prefetchHits is not None and prefetchMetaHits is not None and prefetchMisses is not None and prefetchMetaMisses is not None:
-    arcPrefetchEfficiencyRatio = (float(prefetchHits)+float(prefetchMetaHits)) / (float(prefetchHits)+float(prefetchMetaHits)+float(prefetchMisses)+float(prefetchMetaMisses))
-
+  for idx, line in enumerate(arcstatLineList):
+    if idx != 0:
+      lineArray = line.split()
+      if len(lineArray) is 8:
+        arcReads = int(lineArray[0])
+        arcMisses = int(lineArray[1])
+        arcMissRate = float(lineArray[2])
+        prefetchMissRate = float(lineArray[3])
+        metadataMissRate = float(lineArray[4])
+        demandMissRate = float(lineArray[5])
+        arcSize = str(lineArray[6])
+        arcSize = ConvertToGB(arcSize)
+        arcTargetSize = str(lineArray[7])
+        arcTargetSize = ConvertToGB(arcTargetSize)
             
 ###################################################################################
 ##
@@ -526,17 +534,31 @@ perfdata+=" "
 
 if checkArcstats is True:
   if arcSize is not None and arcMinSize is not None and arcMaxSize is not None:
-    perfdata+="arcsize="+str(arcSize)+";"+str(arcMinSize)+";"+str(arcMaxSize)+";"
+    print("HERE")
+    perfdata+="arcsize="+str(arcSize)+"G;"+str(arcMinSize)+";"+str(arcMaxSize)+";"
     perfdata+=" "
   if arcSize is not None and arcTargetSize is not None:
-    perfdata+="arctargetsize="+str(arcTargetSize)+";"+str(arcMinSize)+";"+str(arcMaxSize)+";"
+    perfdata+="arctargetsize="+str(arcTargetSize)+"G;"+str(arcMinSize)+";"+str(arcMaxSize)+";"
     perfdata+=" "
-  if arcEfficiencyRatio is not None:
-    perfdata+="arcefficiency="+str(round(arcEfficiencyRatio*100,2))+"%;;;"
+  if arcReads is not None:
+    perfdata+="arcreads="+str(arcReads)+";;;"
     perfdata+=" "
-  if arcPrefetchEfficiencyRatio is not None:
-    perfdata+="arcprefetchefficiency="+str(round(arcPrefetchEfficiencyRatio*100,2))+"%;;;"
+  if arcMisses is not None:
+    perfdata+="arcmisses="+str(arcMisses)+";;;"
     perfdata+=" "
+  if arcMissRate is not None:
+    perfdata+="arcmissrate="+str(arcMissRate)+";;;"
+    perfdata+=" "
+  if prefetchMissRate is not None:
+    perfdata+="prefetchmissrate="+str(prefetchMissRate)+";;;"
+    perfdata+=" "
+  if metadataMissRate is not None:
+    perfdata+="metadatamissrate="+str(metadataMissRate)+";;;"
+    perfdata+=" "
+  if demandMissRate is not None:
+    perfdata+="demandmissrate="+str(demandMissRate)+";;;"
+    perfdata+=" "
+
 ##
 # Initial part of msg
 msg="POOL: "+str(name)
