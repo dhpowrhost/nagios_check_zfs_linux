@@ -1,0 +1,31 @@
+---
+
+kind: pipeline
+type: docker
+name: release
+
+steps:
+
+- name: Build
+  image: alpine
+  commands:
+  - mkdir build
+  - mkdir dist
+  - cp -a bin build/
+  - cp -a .bonsai.yml build/
+  - cd dist
+  - tar -C ../build -cvzf sensu-check-zfs_${DRONE_TAG}_linux_amd64.tar.gz .
+  - sha512sum sensu-check-zfs_${DRONE_TAG}_linux_amd64.tar.gz > sensu-check-zfs_${DRONE_TAG}_sha512_checksums.txt
+
+- name: Release
+  image: plugins/github-release
+  settings:
+    api_key:
+      from_secret: GITHUB_RELEASE_TOKEN
+    files:
+      - dist/*
+    checksum:
+      - sha512
+trigger:
+  event:
+    - tag
